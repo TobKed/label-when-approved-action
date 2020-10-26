@@ -23,7 +23,7 @@
     "node",
     "setup"
   ],
-  "author": "YourNameOrOrganization",
+  "author": "Tobiasz Kedzierski",
   "license": "MIT",
   "dependencies": {
     "@actions/core": "^1.2.2",

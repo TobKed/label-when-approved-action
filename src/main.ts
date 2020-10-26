@@ -12,6 +12,11 @@ function getRequiredEnv(key: string): string {
   return value
 }
 
+function verboseOutput(name: string, value: string): void {
+  core.info(`Setting output: ${name}: ${value}`)
+  core.setOutput(name, value)
+}
+
 async function getPullRequest(
   octokit: github.GitHub,
   context: Context,
@@ -48,31 +53,39 @@ async function getReviews(
   number: number,
   getComitters: boolean
 ): Promise<[rest.PullsListReviewsResponseItem[], string[], string[]]> {
-  const reviews = await octokit.pulls.listReviews({
+  let reviews: rest.PullsListReviewsResponseItem[] = []
+  const options = octokit.pulls.listReviews.endpoint.merge({
     owner,
     repo,
     // eslint-disable-next-line @typescript-eslint/camelcase
     pull_number: number
   })
-  const reviewers = reviews ? reviews.data.map(review => review.user.login) : []
+  await octokit.paginate(options).then(r => {
+    reviews = r
+  })
+
+  const reviewers = reviews ? reviews.map(review => review.user.login) : []
+  const reviewersAlreadyChecked: string[] = []
   const committers: string[] = []
   if (getComitters) {
+    core.info('Checking reviewers permissions:')
     for (const reviewer of reviewers) {
-      if (!committers.includes(reviewer)) {
+      if (!reviewersAlreadyChecked.includes(reviewer)) {
         const p = await octokit.repos.getCollaboratorPermissionLevel({
           owner,
           repo,
           username: reviewer
         })
         const permission = p.data.permission
-        core.info(`\nChecking: "${reviewer}" permissions: ${permission}.\n`)
         if (permission === 'admin' || permission === 'write') {
           committers.push(reviewer)
         }
+        core.info(`\t${reviewer}: ${permission}`)
+        reviewersAlreadyChecked.push(reviewer)
       }
     }
   }
-  return [reviews.data, reviewers, committers]
+  return [reviews, reviewers, committers]
 }
 
 function processReviews(
@@ -94,9 +107,9 @@ function processReviews(
     }
   }
 
-  core.info(`User reviews:`)
+  core.info(`Reviews:`)
   for (const user in reviewStates) {
-    core.info(`User "${user}" : "${reviewStates[user]}"`)
+    core.info(`\t${user}: ${reviewStates[user].toLowerCase()}`)
   }
 
   for (const user in reviewStates) {
@@ -122,6 +135,7 @@ async function setLabel(
   pullRequestNumber: number,
   label: string
 ): Promise<void> {
+  core.info(`Setting label: ${label}`)
   await octokit.issues.addLabels({
     // eslint-disable-next-line @typescript-eslint/camelcase
     issue_number: pullRequestNumber,
@@ -138,6 +152,7 @@ async function removeLabel(
   pullRequestNumber: number,
   label: string
 ): Promise<void> {
+  core.info(`Removing label: ${label}`)
   await octokit.issues.removeLabel({
     // eslint-disable-next-line @typescript-eslint/camelcase
     issue_number: pullRequestNumber,
@@ -147,8 +162,84 @@ async function removeLabel(
   })
 }
 
+async function getWorkflowId(
+  octokit: github.GitHub,
+  runId: number,
+  owner: string,
+  repo: string
+): Promise<number> {
+  const reply = await octokit.actions.getWorkflowRun({
+    owner,
+    repo,
+    // eslint-disable-next-line @typescript-eslint/camelcase
+    run_id: runId
+  })
+  core.info(`The source run ${runId} is in ${reply.data.workflow_url} workflow`)
+  const workflowIdString = reply.data.workflow_url.split('/').pop() || ''
+  if (!(workflowIdString.length > 0)) {
+    throw new Error('Could not resolve workflow')
+  }
+  return parseInt(workflowIdString)
+}
+
+async function getPrWorkflowRunsIds(
+  octokit: github.GitHub,
+  owner: string,
+  repo: string,
+  branch: string,
+  sha: string,
+  skipRunId: number
+): Promise<number[]> {
+  const workflowRuns = await octokit.actions.listRepoWorkflowRuns({
+    owner,
+    repo,
+    branch,
+    event: 'pull_request',
+    status: 'completed',
+    // eslint-disable-next-line @typescript-eslint/camelcase
+    per_page: 100
+  })
+  // may be no need to rerun pending/queued runs
+  const filteredRunsIds: number[] = []
+  const filteredWorklowRunsIds: number[] = []
+
+  for (const workflowRun of workflowRuns.data.workflow_runs) {
+    const workflowId = parseInt(
+      workflowRun.workflow_url.split('/').pop() || '0'
+    )
+
+    if (
+      workflowRun.head_sha === sha &&
+      !filteredRunsIds.includes(workflowId) &&
+      workflowId !== skipRunId
+    ) {
+      filteredRunsIds.push(workflowId)
+      filteredWorklowRunsIds.push(workflowRun.id)
+    }
+  }
+
+  return filteredWorklowRunsIds
+}
+
+async function rerunWorkflows(
+  octokit: github.GitHub,
+  owner: string,
+  repo: string,
+  runIds: number[]
+): Promise<void> {
+  core.info(`Rerun worklowws: ${runIds}`)
+  for (const runId of runIds) {
+    await octokit.actions.reRunWorkflow({
+      owner,
+      repo,
+      // eslint-disable-next-line @typescript-eslint/camelcase
+      run_id: runId
+    })
+  }
+}
+
 async function printDebug(
-  item: object | string | boolean,
+  item: object | string | boolean | number,
   description: string
 ): Promise<void> {
   const itemJson = JSON.stringify(item)
@@ -157,18 +248,26 @@ async function printDebug(
 
 async function run(): Promise<void> {
   const token = core.getInput('token', {required: true})
-  const userLabel = core.getInput('label', {required: true})
-  const requireCommittersApproval = core.getInput(
-    'require_committers_approval',
-    {
-      required: true
-    }
-  )
+  const userLabel = core.getInput('label', {required: false}) || 'not set'
+  const requireCommittersApproval =
+    core.getInput('require_committers_approval', {
+      required: false
+    }) === 'true'
   const octokit = new github.GitHub(token)
   const context = github.context
   const repository = getRequiredEnv('GITHUB_REPOSITORY')
   const eventName = getRequiredEnv('GITHUB_EVENT_NAME')
+  const selfRunId = parseInt(getRequiredEnv('GITHUB_RUN_ID'))
   const [owner, repo] = repository.split('/')
+  const selfWorkflowId = await getWorkflowId(octokit, selfRunId, owner, repo)
+  const branch = context.payload.pull_request?.head.ref
+  const sha = context.payload.pull_request?.head.sha
+
+  core.info(
+    `\n############### Set Label When Approved start ##################\n` +
+      `label: "${userLabel}"\n` +
+      `requireCommittersApproval: ${requireCommittersApproval}`
+  )
 
   if (eventName !== 'pull_request_review') {
     throw Error(
@@ -188,21 +287,52 @@ async function run(): Promise<void> {
     owner,
     repo,
     pullRequest.number,
-    requireCommittersApproval === 'true'
+    requireCommittersApproval
   )
   const isApproved = processReviews(
     reviews,
     reviewers,
     committers,
-    requireCommittersApproval === 'true'
+    requireCommittersApproval
   )
 
   // HANDLE LABEL
-  if (isApproved && !labelNames.includes(userLabel)) {
-    setLabel(octokit, owner, repo, pullRequest.number, userLabel)
-  } else if (!isApproved && labelNames.includes(userLabel)) {
-    removeLabel(octokit, owner, repo, pullRequest.number, userLabel)
+  let isLabelShouldBeSet = false
+  let isLabelShouldBeRemoved = false
+
+  if (userLabel !== 'not set') {
+    isLabelShouldBeSet = isApproved && !labelNames.includes(userLabel)
+    isLabelShouldBeRemoved = !isApproved && labelNames.includes(userLabel)
+
+    if (isLabelShouldBeSet) {
+      setLabel(octokit, owner, repo, pullRequest.number, userLabel)
+    } else if (isLabelShouldBeRemoved) {
+      removeLabel(octokit, owner, repo, pullRequest.number, userLabel)
+    }
   }
+
+  //// Future option to rerun workflows if PR approved
+  //// Rerun workflow can have dynamic matrixes which check presence of labels
+  //// it is not possible to rerun successful runs
+  //// https://github.community/t/cannot-re-run-a-successful-workflow-run-using-the-rest-api/123661
+  //
+  // if (isLabelShouldBeSet) {
+  //   const prWorkflowRunsIds = await getPrWorkflowRunsIds(
+  //     octokit,
+  //     owner,
+  //     repo,
+  //     branch,
+  //     sha,
+  //     selfWorkflowId
+  //   )
+  //
+  //   await rerunWorkflows(octokit, owner, repo, prWorkflowRunsIds)
+  // }
+
+  // OUTPUT
+  verboseOutput('isApproved', String(isApproved))
+  verboseOutput('labelSet', String(isLabelShouldBeSet))
+  verboseOutput('labelRemoved', String(isLabelShouldBeRemoved))
 }
 
 run()

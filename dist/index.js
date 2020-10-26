@@ -1466,6 +1466,10 @@ function getRequiredEnv(key) {
     }
     return value;
 }
+function verboseOutput(name, value) {
+    core.info(`Setting output: ${name}: ${value}`);
+    core.setOutput(name, value);
+}
 function getPullRequest(octokit, context, owner, repo) {
     return __awaiter(this, void 0, void 0, function* () {
         const pullRequestNumber = context.payload.pull_request
@@ -1492,31 +1496,38 @@ function getPullRequestLabels(pullRequest) {
 }
 function getReviews(octokit, owner, repo, number, getComitters) {
     return __awaiter(this, void 0, void 0, function* () {
-        const reviews = yield octokit.pulls.listReviews({
+        let reviews = [];
+        const options = octokit.pulls.listReviews.endpoint.merge({
             owner,
             repo,
             // eslint-disable-next-line @typescript-eslint/camelcase
             pull_number: number
         });
-        const reviewers = reviews ? reviews.data.map(review => review.user.login) : [];
+        yield octokit.paginate(options).then(r => {
+            reviews = r;
+        });
+        const reviewers = reviews ? reviews.map(review => review.user.login) : [];
+        const reviewersAlreadyChecked = [];
         const committers = [];
         if (getComitters) {
+            core.info('Checking reviewers permissions:');
             for (const reviewer of reviewers) {
-                if (!committers.includes(reviewer)) {
+                if (!reviewersAlreadyChecked.includes(reviewer)) {
                     const p = yield octokit.repos.getCollaboratorPermissionLevel({
                         owner,
                         repo,
                         username: reviewer
                     });
                     const permission = p.data.permission;
-                    core.info(`\nChecking: "${reviewer}" permissions: ${permission}.\n`);
                     if (permission === 'admin' || permission === 'write') {
                         committers.push(reviewer);
                     }
+                    core.info(`\t${reviewer}: ${permission}`);
+                    reviewersAlreadyChecked.push(reviewer);
                 }
             }
         }
-        return [reviews.data, reviewers, committers];
+        return [reviews, reviewers, committers];
     });
 }
 function processReviews(reviews, reviewers, committers, requireCommittersApproval) {
@@ -1532,9 +1543,9 @@ function processReviews(reviews, reviewers, committers, requireCommittersApprova
             }
         }
     }
-    core.info(`User reviews:`);
+    core.info(`Reviews:`);
     for (const user in reviewStates) {
-        core.info(`User "${user}" : "${reviewStates[user]}"`);
+        core.info(`\t${user}: ${reviewStates[user].toLowerCase()}`);
     }
     for (const user in reviewStates) {
         if (reviewStates[user] === 'APPROVED') {
@@ -1552,6 +1563,7 @@ function processReviews(reviews, reviewers, committers, requireCommittersApprova
 }
 function setLabel(octokit, owner, repo, pullRequestNumber, label) {
     return __awaiter(this, void 0, void 0, function* () {
+        core.info(`Setting label: ${label}`);
         yield octokit.issues.addLabels({
             // eslint-disable-next-line @typescript-eslint/camelcase
             issue_number: pullRequestNumber,
@@ -1563,6 +1575,7 @@ function setLabel(octokit, owner, repo, pullRequestNumber, label) {
 }
 function removeLabel(octokit, owner, repo, pullRequestNumber, label) {
     return __awaiter(this, void 0, void 0, function* () {
+        core.info(`Removing label: ${label}`);
         yield octokit.issues.removeLabel({
             // eslint-disable-next-line @typescript-eslint/camelcase
             issue_number: pullRequestNumber,
@@ -1572,6 +1585,61 @@ function removeLabel(octokit, owner, repo, pullRequestNumber, label) {
         });
     });
 }
+function getWorkflowId(octokit, runId, owner, repo) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const reply = yield octokit.actions.getWorkflowRun({
+            owner,
+            repo,
+            // eslint-disable-next-line @typescript-eslint/camelcase
+            run_id: runId
+        });
+        core.info(`The source run ${runId} is in ${reply.data.workflow_url} workflow`);
+        const workflowIdString = reply.data.workflow_url.split('/').pop() || '';
+        if (!(workflowIdString.length > 0)) {
+            throw new Error('Could not resolve workflow');
+        }
+        return parseInt(workflowIdString);
+    });
+}
+function getPrWorkflowRunsIds(octokit, owner, repo, branch, sha, skipRunId) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const workflowRuns = yield octokit.actions.listRepoWorkflowRuns({
+            owner,
+            repo,
+            branch,
+            event: 'pull_request',
+            status: 'completed',
+            // eslint-disable-next-line @typescript-eslint/camelcase
+            per_page: 100
+        });
+        // may be no need to rerun pending/queued runs
+        const filteredRunsIds = [];
+        const filteredWorklowRunsIds = [];
+        for (const workflowRun of workflowRuns.data.workflow_runs) {
+            const workflowId = parseInt(workflowRun.workflow_url.split('/').pop() || '0');
+            if (workflowRun.head_sha === sha &&
+                !filteredRunsIds.includes(workflowId) &&
+                workflowId !== skipRunId) {
+                filteredRunsIds.push(workflowId);
+                filteredWorklowRunsIds.push(workflowRun.id);
+            }
+        }
+        return filteredWorklowRunsIds;
+    });
+}
+function rerunWorkflows(octokit, owner, repo, runIds) {
+    return __awaiter(this, void 0, void 0, function* () {
+        core.info(`Rerun worklowws: ${runIds}`);
+        for (const runId of runIds) {
+            yield octokit.actions.reRunWorkflow({
+                owner,
+                repo,
+                // eslint-disable-next-line @typescript-eslint/camelcase
+                run_id: runId
+            });
+        }
+    });
+}
 function printDebug(item, description) {
     return __awaiter(this, void 0, void 0, function* () {
         const itemJson = JSON.stringify(item);
@@ -1579,17 +1647,25 @@ function printDebug(item, description) {
     });
 }
 function run() {
+    var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
         const token = core.getInput('token', { required: true });
-        const userLabel = core.getInput('label', { required: true });
+        const userLabel = core.getInput('label', { required: false }) || 'not set';
         const requireCommittersApproval = core.getInput('require_committers_approval', {
-            required: true
-        });
+            required: false
+        }) === 'true';
         const octokit = new github.GitHub(token);
         const context = github.context;
         const repository = getRequiredEnv('GITHUB_REPOSITORY');
         const eventName = getRequiredEnv('GITHUB_EVENT_NAME');
+        const selfRunId = parseInt(getRequiredEnv('GITHUB_RUN_ID'));
         const [owner, repo] = repository.split('/');
+        const selfWorkflowId = yield getWorkflowId(octokit, selfRunId, owner, repo);
+        const branch = (_a = context.payload.pull_request) === null || _a === void 0 ? void 0 : _a.head.ref;
+        const sha = (_b = context.payload.pull_request) === null || _b === void 0 ? void 0 : _b.head.sha;
+        core.info(`\n############### Set Label When Approved start ##################\n` +
+            `label: "${userLabel}"\n` +
+            `requireCommittersApproval: ${requireCommittersApproval}`);
         if (eventName !== 'pull_request_review') {
             throw Error(`This action is only useful in "pull_request_review" triggered runs and you used it in "${eventName}"`);
         }
@@ -1598,15 +1674,42 @@ function run() {
         // LABELS
         const labelNames = getPullRequestLabels(pullRequest);
         // REVIEWS
-        const [reviews, reviewers, committers] = yield getReviews(octokit, owner, repo, pullRequest.number, requireCommittersApproval === 'true');
-        const isApproved = processReviews(reviews, reviewers, committers, requireCommittersApproval === 'true');
+        const [reviews, reviewers, committers] = yield getReviews(octokit, owner, repo, pullRequest.number, requireCommittersApproval);
+        const isApproved = processReviews(reviews, reviewers, committers, requireCommittersApproval);
         // HANDLE LABEL
-        if (isApproved && !labelNames.includes(userLabel)) {
-            setLabel(octokit, owner, repo, pullRequest.number, userLabel);
+        let isLabelShouldBeSet = false;
+        let isLabelShouldBeRemoved = false;
+        if (userLabel !== 'not set') {
+            isLabelShouldBeSet = isApproved && !labelNames.includes(userLabel);
+            isLabelShouldBeRemoved = !isApproved && labelNames.includes(userLabel);
+            if (isLabelShouldBeSet) {
+                setLabel(octokit, owner, repo, pullRequest.number, userLabel);
+            }
+            else if (isLabelShouldBeRemoved) {
+                removeLabel(octokit, owner, repo, pullRequest.number, userLabel);
+            }
         }
-        else if (!isApproved && labelNames.includes(userLabel)) {
-            removeLabel(octokit, owner, repo, pullRequest.number, userLabel);
-        }
+        //// Future option to rerun workflows if PR approved
+        //// Rerun workflow can have dynamic matrixes which check presence of labels
+        //// it is not possible to rerun successful runs
+        //// https://github.community/t/cannot-re-run-a-successful-workflow-run-using-the-rest-api/123661
+        //
+        // if (isLabelShouldBeSet) {
+        //   const prWorkflowRunsIds = await getPrWorkflowRunsIds(
+        //     octokit,
+        //     owner,
+        //     repo,
+        //     branch,
+        //     sha,
+        //     selfWorkflowId
+        //   )
+        //
+        //   await rerunWorkflows(octokit, owner, repo, prWorkflowRunsIds)
+        // }
+        // OUTPUT
+        verboseOutput('isApproved', String(isApproved));
+        verboseOutput('labelSet', String(isLabelShouldBeSet));
+        verboseOutput('labelRemoved', String(isLabelShouldBeRemoved));
     });
 }
 run()
