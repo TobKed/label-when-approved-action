@@ -162,6 +162,23 @@ async function removeLabel(
   })
 }
 
+async function addComment(
+  octokit: github.GitHub,
+  owner: string,
+  repo: string,
+  pullRequestNumber: number,
+  comment: string
+): Promise<void> {
+  core.info(`Adding comment: ${comment}`)
+  await octokit.issues.createComment({
+    owner,
+    repo,
+    // eslint-disable-next-line @typescript-eslint/camelcase
+    issue_number: pullRequestNumber,
+    body: comment
+  })
+}
+
 async function getWorkflowId(
   octokit: github.GitHub,
   runId: number,
@@ -248,11 +265,10 @@ async function printDebug(
 
 async function run(): Promise<void> {
   const token = core.getInput('token', {required: true})
-  const userLabel = core.getInput('label', {required: false}) || 'not set'
+  const userLabel = core.getInput('label') || 'not set'
   const requireCommittersApproval =
-    core.getInput('require_committers_approval', {
-      required: false
-    }) === 'true'
+    core.getInput('require_committers_approval') === 'true'
+  const comment = core.getInput('comment') || ''
   const octokit = new github.GitHub(token)
   const context = github.context
   const repository = getRequiredEnv('GITHUB_REPOSITORY')
@@ -266,7 +282,8 @@ async function run(): Promise<void> {
   core.info(
     `\n############### Set Label When Approved start ##################\n` +
       `label: "${userLabel}"\n` +
-      `requireCommittersApproval: ${requireCommittersApproval}`
+      `requireCommittersApproval: ${requireCommittersApproval}\n` +
+      `comment: ${comment}`
   )
 
   if (eventName !== 'pull_request_review') {
@@ -305,9 +322,12 @@ async function run(): Promise<void> {
     isLabelShouldBeRemoved = !isApproved && labelNames.includes(userLabel)
 
     if (isLabelShouldBeSet) {
-      setLabel(octokit, owner, repo, pullRequest.number, userLabel)
+      await setLabel(octokit, owner, repo, pullRequest.number, userLabel)
+      if (comment !== '') {
+        await addComment(octokit, owner, repo, pullRequest.number, comment)
+      }
     } else if (isLabelShouldBeRemoved) {
-      removeLabel(octokit, owner, repo, pullRequest.number, userLabel)
+      await removeLabel(octokit, owner, repo, pullRequest.number, userLabel)
     }
   }
 
