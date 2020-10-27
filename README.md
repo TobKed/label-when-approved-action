@@ -38,7 +38,7 @@ projects.
 | Input                         | Required | Example                                                         | Comment                                                                 |
 |-------------------------------|----------|-----------------------------------------------------------------|-------------------------------------------------------------------------|
 | `token`                       | yes      | `${{ secrets.GITHUB_TOKEN }}`                                   | The github token passed from `${{ secrets.GITHUB_TOKEN }}`              |
-| `label`                       | no       | `Approved by committers`                                        | Label to be added/removed to the Pull Request if approved/not approved  |
+| `label`                       | no       | `spproved by committers`                                        | Label to be added/removed to the Pull Request if approved/not approved  |
 | `require_committers_approval` | no       | `true`                                                          | Is approval from user with write permission required                    |
 | `comment`                     | no       | `This became approved, rerun tests manually or rebase and push` | Add optional comment to the PR when approved                            |
 
@@ -46,9 +46,9 @@ projects.
 
 | Output         |                              |
 |----------------|------------------------------|
-| `isApproved`   | is Pull Reqeuest is approved |
-| `labelSet`     | is label was set             |
-| `labelRemoved` | is label was removed         |
+| `isApproved`   | is Pull Reqeuest approved    |
+| `labelSet`     | was label set                |
+| `labelRemoved` | was label removed            |
 
 # Examples
 

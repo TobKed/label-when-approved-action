@@ -1676,7 +1676,8 @@ function run() {
         const sha = (_b = context.payload.pull_request) === null || _b === void 0 ? void 0 : _b.head.sha;
         core.info(`\n############### Set Label When Approved start ##################\n` +
             `label: "${userLabel}"\n` +
-            `requireCommittersApproval: ${requireCommittersApproval}`);
+            `requireCommittersApproval: ${requireCommittersApproval}\n` +
+            `comment: ${comment}`);
         if (eventName !== 'pull_request_review') {
             throw Error(`This action is only useful in "pull_request_review" triggered runs and you used it in "${eventName}"`);
         }

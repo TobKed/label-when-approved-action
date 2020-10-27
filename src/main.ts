@@ -282,7 +282,8 @@ async function run(): Promise<void> {
   core.info(
     `\n############### Set Label When Approved start ##################\n` +
       `label: "${userLabel}"\n` +
-      `requireCommittersApproval: ${requireCommittersApproval}`
+      `requireCommittersApproval: ${requireCommittersApproval}\n` +
+      `comment: ${comment}`
   )
 
   if (eventName !== 'pull_request_review') {
