@@ -1585,6 +1585,18 @@ function removeLabel(octokit, owner, repo, pullRequestNumber, label) {
         });
     });
 }
+function addComment(octokit, owner, repo, pullRequestNumber, comment) {
+    return __awaiter(this, void 0, void 0, function* () {
+        core.info(`Adding comment: ${comment}`);
+        yield octokit.issues.createComment({
+            owner,
+            repo,
+            // eslint-disable-next-line @typescript-eslint/camelcase
+            issue_number: pullRequestNumber,
+            body: comment
+        });
+    });
+}
 function getWorkflowId(octokit, runId, owner, repo) {
     return __awaiter(this, void 0, void 0, function* () {
         const reply = yield octokit.actions.getWorkflowRun({
@@ -1650,10 +1662,9 @@ function run() {
     var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
         const token = core.getInput('token', { required: true });
-        const userLabel = core.getInput('label', { required: false }) || 'not set';
-        const requireCommittersApproval = core.getInput('require_committers_approval', {
-            required: false
-        }) === 'true';
+        const userLabel = core.getInput('label') || 'not set';
+        const requireCommittersApproval = core.getInput('require_committers_approval') === 'true';
+        const comment = core.getInput('comment') || '';
         const octokit = new github.GitHub(token);
         const context = github.context;
         const repository = getRequiredEnv('GITHUB_REPOSITORY');
@@ -1683,10 +1694,13 @@ function run() {
             isLabelShouldBeSet = isApproved && !labelNames.includes(userLabel);
             isLabelShouldBeRemoved = !isApproved && labelNames.includes(userLabel);
             if (isLabelShouldBeSet) {
-                setLabel(octokit, owner, repo, pullRequest.number, userLabel);
+                yield setLabel(octokit, owner, repo, pullRequest.number, userLabel);
+                if (comment !== '') {
+                    yield addComment(octokit, owner, repo, pullRequest.number, comment);
+                }
             }
             else if (isLabelShouldBeRemoved) {
-                removeLabel(octokit, owner, repo, pullRequest.number, userLabel);
+                yield removeLabel(octokit, owner, repo, pullRequest.number, userLabel);
             }
         }
         //// Future option to rerun workflows if PR approved
