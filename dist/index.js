@@ -1554,7 +1554,7 @@ function processReviews(reviews, reviewers, committers, requireCommittersApprova
         }
     }
     for (const user in reviewStates) {
-        if (reviewStates[user] === 'REQUEST_CHANGES') {
+        if (reviewStates[user] === 'CHANGES_REQUESTED') {
             isApproved = false;
             break;
         }
