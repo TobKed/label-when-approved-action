@@ -1,8 +1,8 @@
+# Label When Approved action
+
 <p><a href="https://github.com/TobKed/label-when-approved-action/actions">
 <img alt="label-when-approved-action status"
     src="https://github.com/TobKed/label-when-approved-action/workflows/Test%20the%20build/badge.svg"></a>
-
-# Label When Approved action
 
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
@@ -68,7 +68,7 @@ jobs:
       isApprovedByAnyone: ${{ steps.label-when-approved-by-anyone.outputs.isApproved }}
     steps:
       - name: Label when approved by commiters
-        uses: TobKed/label-when-approved-action@v1
+        uses: TobKed/label-when-approved-action@v1.1
         id: label-when-approved-by-commiters
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -76,7 +76,7 @@ jobs:
           require_committers_approval: 'true'
           comment: 'PR approved by at least one committer and no changes requested.'
       - name: Label when approved by anyone
-        uses: TobKed/label-when-approved-action@v1
+        uses: TobKed/label-when-approved-action@v1.1
         id: label-when-approved-by-anyone
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
