@@ -15,8 +15,9 @@
   - [Outputs](#outputs)
 - [Examples](#examples)
     - [Workflow Run event](#workflow-run-event)
-  - [Development environment](#development-environment)
-  - [License](#license)
+    - [Pull Request Review event](#pull-request-review-event)
+- [Development environment](#development-environment)
+- [License](#license)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -31,6 +32,13 @@ The required input `require_committers_approval` says is approval can be done by
 or by anyone. It may be useful in repositories which requires committers approvals like [Apache Software Foundation](https://github.com/apache/)
 projects.
 
+It can be used in workflows triggered by "pull_request_review" or "workflow_run".
+When used on "pull_request_review" any workflows triggered from pull request created from fork will fail
+due to insufficient permissions. Because of this support for "workflow_run" was added.
+It should be triggered by workflows "pull_request_review" and requires additional input `pullRequestNumber`.
+Pull request number can be obtained by using [potiuk/get-workflow-origin)](https://github.com/potiuk/get-workflow-origin) action (see example [workflow-run-event](#workflow-run-event)).
+
+
 # Inputs and outputs
 
 ## Inputs
@@ -41,6 +49,7 @@ projects.
 | `label`                       | no       | `Approved by committers`                                          | Label to be added/removed to the Pull Request if approved/not approved        |
 | `require_committers_approval` | no       | `true`                                                            | Is approval from user with write permission required                          |
 | `comment`                     | no       | `PR approved by at least one committer and no changes requested.` | Add optional comment to the PR when approved (requires label input to be set) |
+| `pullRequestNumber`           | no       | `${{ steps.source-run-info.outputs.pullRequestNumber }}`          | Pull request number if triggered  by "worfklow_run"                           |
 
 ## Outputs
 
@@ -53,6 +62,38 @@ projects.
 # Examples
 
 ### Workflow Run event
+
+```yaml
+name: "Label when approved"
+on:
+  workflow_run:
+    workflows: ["Workflow triggered on pull_request_review"]
+    types: ['requested']
+
+jobs:
+
+  label-when-approved:
+    name: "Label when approved"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Get information about the original trigger of the run"
+        uses: potiuk/get-workflow-origin@v1_2
+        id: source-run-info
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sourceRunId: ${{ github.event.workflow_run.id }}
+      - name: Label when approved by anyone
+        uses: TobKed/label-when-approved-action@v1.2
+        id: label-when-approved-by-anyone
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          require_committers_approval: 'true'
+          label: 'Approved by committer'
+          comment: 'PR approved by at least one committer and no changes requested.'
+          pullRequestNumber: ${{ steps.source-run-info.outputs.pullRequestNumber }}
+```
+
+### Pull Request Review event
 
 ```yaml
 name: Label when approved
@@ -68,7 +109,7 @@ jobs:
       isApprovedByAnyone: ${{ steps.label-when-approved-by-anyone.outputs.isApproved }}
     steps:
       - name: Label when approved by commiters
-        uses: TobKed/label-when-approved-action@v1.1
+        uses: TobKed/label-when-approved-action@v1.2
         id: label-when-approved-by-commiters
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -76,19 +117,18 @@ jobs:
           require_committers_approval: 'true'
           comment: 'PR approved by at least one committer and no changes requested.'
       - name: Label when approved by anyone
-        uses: TobKed/label-when-approved-action@v1.1
+        uses: TobKed/label-when-approved-action@v1.2
         id: label-when-approved-by-anyone
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-
-## Development environment
+# Development environment
 
 It is highly recommended tu use [pre commit](https://pre-commit.com). The pre-commits
 installed via pre-commit tool handle automatically linting (including automated fixes) as well
 as building and packaging Javascript index.js from the main.ts Typescript code, so you do not have
 to run it yourself.
 
-## License
+# License
 [MIT License](LICENSE) covers the scripts and documentation in this project.
