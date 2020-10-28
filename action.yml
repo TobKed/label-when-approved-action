@@ -14,6 +14,9 @@ inputs:
   comment:
     description: 'Comment to be added to Pull Request if approved'
     required: false
+  pullRequestNumber:
+    description: 'Pull request number if triggered  by "worfklow_run"'
+    required: false
 outputs:
   isApproved:
     description: 'Is Pull Reqeuest approved'

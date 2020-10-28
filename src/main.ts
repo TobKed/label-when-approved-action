@@ -1,7 +1,6 @@
 import * as github from '@actions/github'
 import * as core from '@actions/core'
 import * as rest from '@octokit/rest'
-import {Context} from '@actions/github/lib/context'
 
 function getRequiredEnv(key: string): string {
   const value = process.env[key]
@@ -19,17 +18,11 @@ function verboseOutput(name: string, value: string): void {
 
 async function getPullRequest(
   octokit: github.GitHub,
-  context: Context,
   owner: string,
-  repo: string
+  repo: string,
+  pullRequestNumber: number
 ): Promise<rest.PullsGetResponse> {
-  const pullRequestNumber = context.payload.pull_request
-    ? context.payload.pull_request.number
-    : null
-  if (pullRequestNumber === null) {
-    throw Error(`Could not find PR number in context payload.`)
-  }
-  core.info(`pullRequestNumber: ${pullRequestNumber}`)
+  core.info(`Fetching pull request with number: ${pullRequestNumber}`)
   const pullRequest = await octokit.pulls.get({
     owner,
     repo,
@@ -179,88 +172,12 @@ async function addComment(
   })
 }
 
-async function getWorkflowId(
-  octokit: github.GitHub,
-  runId: number,
-  owner: string,
-  repo: string
-): Promise<number> {
-  const reply = await octokit.actions.getWorkflowRun({
-    owner,
-    repo,
-    // eslint-disable-next-line @typescript-eslint/camelcase
-    run_id: runId
-  })
-  core.info(`The source run ${runId} is in ${reply.data.workflow_url} workflow`)
-  const workflowIdString = reply.data.workflow_url.split('/').pop() || ''
-  if (!(workflowIdString.length > 0)) {
-    throw new Error('Could not resolve workflow')
-  }
-  return parseInt(workflowIdString)
-}
-
-async function getPrWorkflowRunsIds(
-  octokit: github.GitHub,
-  owner: string,
-  repo: string,
-  branch: string,
-  sha: string,
-  skipRunId: number
-): Promise<number[]> {
-  const workflowRuns = await octokit.actions.listRepoWorkflowRuns({
-    owner,
-    repo,
-    branch,
-    event: 'pull_request',
-    status: 'completed',
-    // eslint-disable-next-line @typescript-eslint/camelcase
-    per_page: 100
-  })
-  // may be no need to rerun pending/queued runs
-  const filteredRunsIds: number[] = []
-  const filteredWorklowRunsIds: number[] = []
-
-  for (const workflowRun of workflowRuns.data.workflow_runs) {
-    const workflowId = parseInt(
-      workflowRun.workflow_url.split('/').pop() || '0'
-    )
-
-    if (
-      workflowRun.head_sha === sha &&
-      !filteredRunsIds.includes(workflowId) &&
-      workflowId !== skipRunId
-    ) {
-      filteredRunsIds.push(workflowId)
-      filteredWorklowRunsIds.push(workflowRun.id)
-    }
-  }
-
-  return filteredWorklowRunsIds
-}
-
-async function rerunWorkflows(
-  octokit: github.GitHub,
-  owner: string,
-  repo: string,
-  runIds: number[]
-): Promise<void> {
-  core.info(`Rerun worklowws: ${runIds}`)
-  for (const runId of runIds) {
-    await octokit.actions.reRunWorkflow({
-      owner,
-      repo,
-      // eslint-disable-next-line @typescript-eslint/camelcase
-      run_id: runId
-    })
-  }
-}
-
 async function printDebug(
   item: object | string | boolean | number,
-  description: string
+  description: string = ''
 ): Promise<void> {
   const itemJson = JSON.stringify(item)
-  core.info(`\n ######### ${description} ######### \n: ${itemJson}\n\n`)
+  core.debug(`\n ######### ${description} ######### \n: ${itemJson}\n\n`)
 }
 
 async function run(): Promise<void> {
@@ -269,31 +186,49 @@ async function run(): Promise<void> {
   const requireCommittersApproval =
     core.getInput('require_committers_approval') === 'true'
   const comment = core.getInput('comment') || ''
+  const pullRequestNumberInput = core.getInput('pullRequestNumber') || 'not set'
   const octokit = new github.GitHub(token)
   const context = github.context
   const repository = getRequiredEnv('GITHUB_REPOSITORY')
   const eventName = getRequiredEnv('GITHUB_EVENT_NAME')
-  const selfRunId = parseInt(getRequiredEnv('GITHUB_RUN_ID'))
   const [owner, repo] = repository.split('/')
-  const selfWorkflowId = await getWorkflowId(octokit, selfRunId, owner, repo)
-  const branch = context.payload.pull_request?.head.ref
-  const sha = context.payload.pull_request?.head.sha
+  let pullRequestNumber: number | undefined
 
   core.info(
     `\n############### Set Label When Approved start ##################\n` +
       `label: "${userLabel}"\n` +
       `requireCommittersApproval: ${requireCommittersApproval}\n` +
-      `comment: ${comment}`
+      `comment: ${comment}\n` +
+      `pullRequestNumber: ${pullRequestNumberInput}`
   )
 
-  if (eventName !== 'pull_request_review') {
+  if (eventName === 'pull_request_review') {
+    pullRequestNumber = context.payload.pull_request
+      ? context.payload.pull_request.number
+      : undefined
+    if (pullRequestNumber === undefined) {
+      throw Error(`Could not find PR number in context payload.`)
+    }
+  } else if (eventName === 'workflow_run') {
+    if (pullRequestNumberInput === 'not set') {
+      throw Error(
+        `If action is triggered by "workflow_run" then input "pullRequestNumber" is required.`
+      )
+    }
+    pullRequestNumber = parseInt(pullRequestNumberInput)
+  } else {
     throw Error(
-      `This action is only useful in "pull_request_review" triggered runs and you used it in "${eventName}"`
+      `This action is only useful in "pull_request_review" or "workflow_run" triggered runs and you used it in "${eventName}"`
     )
   }
 
   // PULL REQUEST
-  const pullRequest = await getPullRequest(octokit, context, owner, repo)
+  const pullRequest = await getPullRequest(
+    octokit,
+    owner,
+    repo,
+    pullRequestNumber
+  )
 
   // LABELS
   const labelNames = getPullRequestLabels(pullRequest)
@@ -330,24 +265,6 @@ async function run(): Promise<void> {
       await removeLabel(octokit, owner, repo, pullRequest.number, userLabel)
     }
   }
-
-  //// Future option to rerun workflows if PR approved
-  //// Rerun workflow can have dynamic matrixes which check presence of labels
-  //// it is not possible to rerun successful runs
-  //// https://github.community/t/cannot-re-run-a-successful-workflow-run-using-the-rest-api/123661
-  //
-  // if (isLabelShouldBeSet) {
-  //   const prWorkflowRunsIds = await getPrWorkflowRunsIds(
-  //     octokit,
-  //     owner,
-  //     repo,
-  //     branch,
-  //     sha,
-  //     selfWorkflowId
-  //   )
-  //
-  //   await rerunWorkflows(octokit, owner, repo, prWorkflowRunsIds)
-  // }
 
   // OUTPUT
   verboseOutput('isApproved', String(isApproved))

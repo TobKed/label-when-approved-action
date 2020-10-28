@@ -1470,15 +1470,9 @@ function verboseOutput(name, value) {
     core.info(`Setting output: ${name}: ${value}`);
     core.setOutput(name, value);
 }
-function getPullRequest(octokit, context, owner, repo) {
+function getPullRequest(octokit, owner, repo, pullRequestNumber) {
     return __awaiter(this, void 0, void 0, function* () {
-        const pullRequestNumber = context.payload.pull_request
-            ? context.payload.pull_request.number
-            : null;
-        if (pullRequestNumber === null) {
-            throw Error(`Could not find PR number in context payload.`);
-        }
-        core.info(`pullRequestNumber: ${pullRequestNumber}`);
+        core.info(`Fetching pull request with number: ${pullRequestNumber}`);
         const pullRequest = yield octokit.pulls.get({
             owner,
             repo,
@@ -1597,92 +1591,49 @@ function addComment(octokit, owner, repo, pullRequestNumber, comment) {
         });
     });
 }
-function getWorkflowId(octokit, runId, owner, repo) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const reply = yield octokit.actions.getWorkflowRun({
-            owner,
-            repo,
-            // eslint-disable-next-line @typescript-eslint/camelcase
-            run_id: runId
-        });
-        core.info(`The source run ${runId} is in ${reply.data.workflow_url} workflow`);
-        const workflowIdString = reply.data.workflow_url.split('/').pop() || '';
-        if (!(workflowIdString.length > 0)) {
-            throw new Error('Could not resolve workflow');
-        }
-        return parseInt(workflowIdString);
-    });
-}
-function getPrWorkflowRunsIds(octokit, owner, repo, branch, sha, skipRunId) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const workflowRuns = yield octokit.actions.listRepoWorkflowRuns({
-            owner,
-            repo,
-            branch,
-            event: 'pull_request',
-            status: 'completed',
-            // eslint-disable-next-line @typescript-eslint/camelcase
-            per_page: 100
-        });
-        // may be no need to rerun pending/queued runs
-        const filteredRunsIds = [];
-        const filteredWorklowRunsIds = [];
-        for (const workflowRun of workflowRuns.data.workflow_runs) {
-            const workflowId = parseInt(workflowRun.workflow_url.split('/').pop() || '0');
-            if (workflowRun.head_sha === sha &&
-                !filteredRunsIds.includes(workflowId) &&
-                workflowId !== skipRunId) {
-                filteredRunsIds.push(workflowId);
-                filteredWorklowRunsIds.push(workflowRun.id);
-            }
-        }
-        return filteredWorklowRunsIds;
-    });
-}
-function rerunWorkflows(octokit, owner, repo, runIds) {
-    return __awaiter(this, void 0, void 0, function* () {
-        core.info(`Rerun worklowws: ${runIds}`);
-        for (const runId of runIds) {
-            yield octokit.actions.reRunWorkflow({
-                owner,
-                repo,
-                // eslint-disable-next-line @typescript-eslint/camelcase
-                run_id: runId
-            });
-        }
-    });
-}
-function printDebug(item, description) {
+function printDebug(item, description = '') {
     return __awaiter(this, void 0, void 0, function* () {
         const itemJson = JSON.stringify(item);
-        core.info(`\n ######### ${description} ######### \n: ${itemJson}\n\n`);
+        core.debug(`\n ######### ${description} ######### \n: ${itemJson}\n\n`);
     });
 }
 function run() {
-    var _a, _b;
     return __awaiter(this, void 0, void 0, function* () {
         const token = core.getInput('token', { required: true });
         const userLabel = core.getInput('label') || 'not set';
         const requireCommittersApproval = core.getInput('require_committers_approval') === 'true';
         const comment = core.getInput('comment') || '';
+        const pullRequestNumberInput = core.getInput('pullRequestNumber') || 'not set';
         const octokit = new github.GitHub(token);
         const context = github.context;
         const repository = getRequiredEnv('GITHUB_REPOSITORY');
         const eventName = getRequiredEnv('GITHUB_EVENT_NAME');
-        const selfRunId = parseInt(getRequiredEnv('GITHUB_RUN_ID'));
         const [owner, repo] = repository.split('/');
-        const selfWorkflowId = yield getWorkflowId(octokit, selfRunId, owner, repo);
-        const branch = (_a = context.payload.pull_request) === null || _a === void 0 ? void 0 : _a.head.ref;
-        const sha = (_b = context.payload.pull_request) === null || _b === void 0 ? void 0 : _b.head.sha;
+        let pullRequestNumber;
         core.info(`\n############### Set Label When Approved start ##################\n` +
             `label: "${userLabel}"\n` +
             `requireCommittersApproval: ${requireCommittersApproval}\n` +
-            `comment: ${comment}`);
-        if (eventName !== 'pull_request_review') {
-            throw Error(`This action is only useful in "pull_request_review" triggered runs and you used it in "${eventName}"`);
+            `comment: ${comment}\n` +
+            `pullRequestNumber: ${pullRequestNumberInput}`);
+        if (eventName === 'pull_request_review') {
+            pullRequestNumber = context.payload.pull_request
+                ? context.payload.pull_request.number
+                : undefined;
+            if (pullRequestNumber === undefined) {
+                throw Error(`Could not find PR number in context payload.`);
+            }
+        }
+        else if (eventName === 'workflow_run') {
+            if (pullRequestNumberInput === 'not set') {
+                throw Error(`If action is triggered by "workflow_run" then input "pullRequestNumber" is required.`);
+            }
+            pullRequestNumber = parseInt(pullRequestNumberInput);
+        }
+        else {
+            throw Error(`This action is only useful in "pull_request_review" or "workflow_run" triggered runs and you used it in "${eventName}"`);
         }
         // PULL REQUEST
-        const pullRequest = yield getPullRequest(octokit, context, owner, repo);
+        const pullRequest = yield getPullRequest(octokit, owner, repo, pullRequestNumber);
         // LABELS
         const labelNames = getPullRequestLabels(pullRequest);
         // REVIEWS
@@ -1704,23 +1655,6 @@ function run() {
                 yield removeLabel(octokit, owner, repo, pullRequest.number, userLabel);
             }
         }
-        //// Future option to rerun workflows if PR approved
-        //// Rerun workflow can have dynamic matrixes which check presence of labels
-        //// it is not possible to rerun successful runs
-        //// https://github.community/t/cannot-re-run-a-successful-workflow-run-using-the-rest-api/123661
-        //
-        // if (isLabelShouldBeSet) {
-        //   const prWorkflowRunsIds = await getPrWorkflowRunsIds(
-        //     octokit,
-        //     owner,
-        //     repo,
-        //     branch,
-        //     sha,
-        //     selfWorkflowId
-        //   )
-        //
-        //   await rerunWorkflows(octokit, owner, repo, prWorkflowRunsIds)
-        // }
         // OUTPUT
         verboseOutput('isApproved', String(isApproved));
         verboseOutput('labelSet', String(isLabelShouldBeSet));
