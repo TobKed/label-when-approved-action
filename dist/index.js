@@ -1625,9 +1625,14 @@ function run() {
         }
         else if (eventName === 'workflow_run') {
             if (pullRequestNumberInput === 'not set') {
-                throw Error(`If action is triggered by "workflow_run" then input "pullRequestNumber" is required.`);
+                core.warning(`If action is triggered by "workflow_run" then input "pullRequestNumber" is required.\n` +
+                    `It might be missing because the pull request might have been already merged or a fixup pushed to` +
+                    `the PR branch. None of the outputs will be set as we cannot find the right PR.`);
+                return;
             }
-            pullRequestNumber = parseInt(pullRequestNumberInput);
+            else {
+                pullRequestNumber = parseInt(pullRequestNumberInput);
+            }
         }
         else {
             throw Error(`This action is only useful in "pull_request_review" or "workflow_run" triggered runs and you used it in "${eventName}"`);
