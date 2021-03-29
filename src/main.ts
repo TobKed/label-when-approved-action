@@ -33,10 +33,7 @@ async function getPullRequest(
 }
 
 function getPullRequestLabels(pullRequest: rest.PullsGetResponse): string[] {
-  const labelNames = pullRequest
-    ? pullRequest.labels.map(label => label.name)
-    : []
-  return labelNames
+  return pullRequest ? pullRequest.labels.map(label => label.name) : []
 }
 
 async function getReviews(
@@ -172,19 +169,21 @@ async function addComment(
   })
 }
 
-async function printDebug(
-  item: object | string | boolean | number,
-  description: string = ''
-): Promise<void> {
-  const itemJson = JSON.stringify(item)
-  core.debug(`\n ######### ${description} ######### \n: ${itemJson}\n\n`)
-}
+// async function printDebug(
+//   item: object | string | boolean | number,
+//   description: string = ''
+// ): Promise<void> {
+//   const itemJson = JSON.stringify(item)
+//   core.debug(`\n ######### ${description} ######### \n: ${itemJson}\n\n`)
+// }
 
 async function run(): Promise<void> {
   const token = core.getInput('token', {required: true})
   const userLabel = core.getInput('label') || 'not set'
   const requireCommittersApproval =
     core.getInput('require_committers_approval') === 'true'
+  const removeLabelWhenApprovalMissing =
+    core.getInput('remove_label_when_approval_missing') === 'true'
   const comment = core.getInput('comment') || ''
   const pullRequestNumberInput = core.getInput('pullRequestNumber') || 'not set'
   const octokit = new github.GitHub(token)
@@ -258,7 +257,10 @@ async function run(): Promise<void> {
 
   if (userLabel !== 'not set') {
     isLabelShouldBeSet = isApproved && !labelNames.includes(userLabel)
-    isLabelShouldBeRemoved = !isApproved && labelNames.includes(userLabel)
+    isLabelShouldBeRemoved =
+      !isApproved &&
+      labelNames.includes(userLabel) &&
+      removeLabelWhenApprovalMissing
 
     if (isLabelShouldBeSet) {
       await setLabel(octokit, owner, repo, pullRequest.number, userLabel)

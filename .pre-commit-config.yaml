@@ -32,7 +32,7 @@ repos:
       - id: build
         name: Build package for distribution
         language: system
-        entry: bash -c "npm run release"
+        entry: ./scripts/transpile_if_needed.sh
         files: .*\.ts$
         require_serial: true
         pass_filenames: false

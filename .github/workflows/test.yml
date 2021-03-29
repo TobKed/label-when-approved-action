@@ -20,6 +20,7 @@ jobs:
           key: ${{ env.cache-name }}-${{ github.job }}-${{ hashFiles('package.json','package-lock.json') }}
       - name: "Install dependencies for npm"
         run: |
+          npm install npm@latest
           npm ci
       - name: Cache pre-commit env
         uses: actions/cache@v2

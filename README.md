@@ -30,7 +30,8 @@ Setting label is optional that only output can be used in the workflow.
 
 The required input `require_committers_approval` says is approval can be done by people with read access to the repo
 or by anyone. It may be useful in repositories which requires committers approvals like [Apache Software Foundation](https://github.com/apache/)
-projects.
+projects. By default, when the PR does not have "approved" status or looses its aproval status the label is removed.
+This behaviour can be disabled when `remove_label_when_approval_missing` is set to false.
 
 It can be used in workflows triggered by "pull_request_review" or "workflow_run".
 When used on "pull_request_review" any workflows triggered from pull request created from fork will fail
@@ -43,19 +44,20 @@ Pull request number can be obtained by using [potiuk/get-workflow-origin)](https
 
 ## Inputs
 
-| Input                         | Required | Example                                                           | Comment                                                                       |
-|-------------------------------|----------|-------------------------------------------------------------------|-------------------------------------------------------------------------------|
-| `token`                       | yes      | `${{ secrets.GITHUB_TOKEN }}`                                     | The github token passed from `${{ secrets.GITHUB_TOKEN }}`                    |
-| `label`                       | no       | `Approved by committers`                                          | Label to be added/removed to the Pull Request if approved/not approved        |
-| `require_committers_approval` | no       | `true`                                                            | Is approval from user with write permission required                          |
-| `comment`                     | no       | `PR approved by at least one committer and no changes requested.` | Add optional comment to the PR when approved (requires label input to be set) |
-| `pullRequestNumber`           | no       | `${{ steps.source-run-info.outputs.pullRequestNumber }}`          | Pull request number if triggered  by "worfklow_run"                           |
+| Input                                | Required | Example                                                           | Comment                                                                       |
+|--------------------------------------|----------|-------------------------------------------------------------------|-------------------------------------------------------------------------------|
+| `token`                              | yes      | `${{ secrets.GITHUB_TOKEN }}`                                     | The github token passed from `${{ secrets.GITHUB_TOKEN }}`                    |
+| `label`                              | no       | `Approved by committers`                                          | Label to be added/removed to the Pull Request if approved/not approved        |
+| `require_committers_approval`        | no       | `true`                                                            | Is approval from user with write permission required                          |
+| `remove_label_when_approval_missing` | no       | `true`                                                            | Should label be removed when approval is missing                              |
+| `comment`                            | no       | `PR approved by at least one committer and no changes requested.` | Add optional comment to the PR when approved (requires label input to be set) |
+| `pullRequestNumber`                  | no       | `${{ steps.source-run-info.outputs.pullRequestNumber }}`          | Pull request number if triggered  by "worfklow_run"                           |
 
 ## Outputs
 
 | Output         |                              |
 |----------------|------------------------------|
-| `isApproved`   | is Pull Reqeuest approved    |
+| `isApproved`   | is Pull Request approved     |
 | `labelSet`     | was label set                |
 | `labelRemoved` | was label removed            |
 
@@ -115,6 +117,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           label: 'ready to merge (committers)'
           require_committers_approval: 'true'
+          remove_label_when_approval_missing: 'false'
           comment: 'PR approved by at least one committer and no changes requested.'
       - name: Label when approved by anyone
         uses: TobKed/label-when-approved-action@v1.2
