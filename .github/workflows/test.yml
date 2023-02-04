@@ -7,12 +7,12 @@ jobs:
   pre-commit: # make sure pre-commits work properly
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-python@v2
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
         with:
-          python-version: 3.6
+          python-version: 3.10
       - name: Cache npm env
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         env:
           cache-name: cache-npm-v1
         with:
@@ -23,7 +23,7 @@ jobs:
           npm install npm@latest
           npm ci
       - name: Cache pre-commit env
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         env:
           cache-name: cache-pre-commit-v1
         with:
